@@ -103,20 +103,23 @@ def fetch_annotation(article_url):
         return ""
 
 def clean_annotation(html_text):
-    """
-    Извлекает из HTML-страницы аннотацию, если она найдена в блоках 'Abstracts' или 'svAbstract'.
-    Убирает лишние элементы вроде 'Graphical abstract'.
-    """
     soup = BeautifulSoup(html_text, "html.parser")
+
+    # Сначала пробуем найти старые варианты:
     abstract_div = soup.find("div", class_="Abstracts")
     if not abstract_div:
         abstract_div = soup.find("div", class_="svAbstract")
 
+    # Если не нашли, пробуем «новый» вариант:
+    if not abstract_div:
+        abstract_div = soup.find("div", class_="abstract author")
+
     if abstract_div:
         text = abstract_div.get_text(separator=" ", strip=True)
-        # Удаляем всё, что идет после "Graphical abstract", если оно есть
+        # Удаляем всё, что идёт после "Graphical abstract", если оно есть
         if "Graphical abstract" in text:
             text = text.split("Graphical abstract")[0].strip()
+        # Сжимаем повторяющиеся пробелы
         text = re.sub(r'\s+', ' ', text)
         return text
 
@@ -358,7 +361,7 @@ def send_csv_to_telegram():
 schedule.every(1).minutes.do(main)
 
 # Выгрузка БД (CSV) и отправка файла каждую субботу в 17:00
-schedule.every().saturday.at("22:15").do(send_csv_to_telegram)
+schedule.every().saturday.at("01:20").do(send_csv_to_telegram)
 
 if __name__ == "__main__":
     logger.info("Бот запущен. Ожидание задач...")
