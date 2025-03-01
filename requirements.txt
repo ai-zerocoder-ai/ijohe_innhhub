@@ -1,0 +1,8 @@
+feedparser
+openai
+python-dotenv
+telebot
+APScheduler
+beautifulsoup4
+requests
+schedule
