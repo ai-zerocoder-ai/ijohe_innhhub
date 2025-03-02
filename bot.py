@@ -361,7 +361,7 @@ def send_csv_to_telegram():
 # 1) Проверяем RSS каждую минуту
 schedule.every(1).minutes.do(main)
 # 2) Отправляем CSV по субботам в 02:50 (пример)
-schedule.every().saturday.at("02:50").do(send_csv_to_telegram)
+schedule.every().saturday.at("17:00").do(send_csv_to_telegram)
 
 if __name__ == "__main__":
     logger.info("Бот запущен. Ожидание задач...")
