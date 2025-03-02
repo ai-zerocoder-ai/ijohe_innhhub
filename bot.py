@@ -51,8 +51,8 @@ def parse_rss():
         return []
 
     articles = []
-    # Ограничение до 2 статей для теста. Уберите [:2], если нужно получать все записи.
-    for entry in feed.entries[:2]:
+    # Для теста берем 5 статей. Уберите [:5], если нужно обрабатывать все.
+    for entry in feed.entries[:5]:
         title = entry.get('title', 'Без названия')
         link = entry.get('link', '#')
         description_html = entry.get('description', '')
@@ -75,7 +75,7 @@ def parse_rss():
             'link': link,
             'published_date': publication_date,
             'authors': authors,
-            'annotation': 'Аннотация отсутствует.',  # По умолчанию; обновится после парсинга страницы
+            'annotation': 'Аннотация отсутствует.',  # По умолчанию; обновится после парсинга
             'description': description_html
         })
 
@@ -103,20 +103,23 @@ def fetch_annotation(article_url):
         return ""
 
 def clean_annotation(html_text):
+    """
+    Ищем аннотацию в разных вариантах контейнеров.
+    """
     soup = BeautifulSoup(html_text, "html.parser")
 
-    # Сначала пробуем найти старые варианты:
+    # Сначала пробуем найти старые варианты
     abstract_div = soup.find("div", class_="Abstracts")
     if not abstract_div:
         abstract_div = soup.find("div", class_="svAbstract")
 
-    # Если не нашли, пробуем «новый» вариант:
+    # Если не нашли, пробуем «новый» вариант
     if not abstract_div:
         abstract_div = soup.find("div", class_="abstract author")
 
     if abstract_div:
         text = abstract_div.get_text(separator=" ", strip=True)
-        # Удаляем всё, что идёт после "Graphical abstract", если оно есть
+        # Удаляем всё, что идёт после "Graphical abstract", если есть
         if "Graphical abstract" in text:
             text = text.split("Graphical abstract")[0].strip()
         # Сжимаем повторяющиеся пробелы
@@ -128,14 +131,13 @@ def clean_annotation(html_text):
 def translate_title_openai(eng_title: str) -> str:
     """
     Переводит заголовок статьи на русский язык через GPT-4 (или gpt-3.5-turbo).
-    Если заголовок отсутствует или равен "No Title", возвращается "Нет заголовка".
     """
     if not eng_title or eng_title == "No Title":
         return "Нет заголовка"
 
     try:
         completion = openai.chat.completions.create(
-            model="gpt-4o",  # Замените на "gpt-3.5-turbo", если GPT-4 недоступен
+            model="gpt-4o",  # Или "gpt-3.5-turbo", если нет GPT-4
             messages=[
                 {
                     "role": "system",
@@ -155,21 +157,24 @@ def translate_title_openai(eng_title: str) -> str:
 
 def translate_annotation_openai(eng_annotation: str) -> str:
     """
-    Переводит аннотацию статьи на русский язык через GPT-4 (или gpt-3.5-turbo).
-    Если аннотация отсутствует или равна "Annotation not found.", возвращается "Аннотация не найдена."
+    Переводит аннотацию на русский язык.
+    Если аннотации нет, возвращает "Аннотация не найдена."
     """
     if not eng_annotation or eng_annotation == "Annotation not found.":
         return "Аннотация не найдена."
 
     try:
         completion = openai.chat.completions.create(
-            model="gpt-4o",  # Замените на "gpt-3.5-turbo", если необходимо
+            model="gpt-4o",
             messages=[
                 {
                     "role": "system",
-                    "content": ("Ты — профессиональный аналитик и переводчик. Выбери из текста только текст аннотации и переведи аннотацию на русский язык. "
-                                "Раздел Highlights не нужен совсем, не переводи его и не включай в окончательный текст. "
-                                "Нужен только текст аннотации, переведенный на русский язык. Не пиши слово Аннотация вначале.")
+                    "content": (
+                        "Ты — профессиональный аналитик и переводчик. "
+                        "Выбери из текста только текст аннотации и переведи аннотацию на русский язык. "
+                        "Раздел Highlights не нужен совсем, не переводи его и не включай в окончательный текст. "
+                        "Нужен только текст аннотации, переведенный на русский язык. Не пиши слово Аннотация вначале."
+                    )
                 },
                 {
                     "role": "user",
@@ -186,7 +191,6 @@ def translate_annotation_openai(eng_annotation: str) -> str:
 def save_to_db(article):
     """
     Сохраняет статью в базу данных.
-    Таблица содержит: hash, title_ru, annotation_ru, authors, published_date, url.
     """
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -208,12 +212,11 @@ def save_to_db(article):
 
 def is_article_new(article_hash: str) -> bool:
     """
-    Проверяет, существует ли статья с данным хэшем в базе данных.
-    Возвращает True, если статья новая, и False, если уже есть.
+    Проверяет, есть ли статья с данным хэшем в базе.
+    Возвращает True, если статья новая, иначе False.
     """
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Убедимся, что таблица существует
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS articles (
             hash TEXT PRIMARY KEY,
@@ -230,13 +233,18 @@ def is_article_new(article_hash: str) -> bool:
     conn.close()
     return not exists
 
+def sanitize_for_telegram(text: str) -> str:
+    """
+    Удаляем теги <sub>...</sub> и <sup>...</sup>,
+    т.к. Telegram в режиме HTML не поддерживает их.
+    """
+    text = text.replace("<sub>", "").replace("</sub>", "")
+    text = text.replace("<sup>", "").replace("</sup>", "")
+    return text
+
 def publish_to_telegram(article):
     """
-    Публикует статью в Telegram-канале с форматированием:
-    - Заголовок (на русском)
-    - Дата публикации и авторы
-    - Переведённый текст аннотации (без слова "Аннотация:" в начале)
-    - Кнопка "Читать далее" с ссылкой на оригинальную статью
+    Публикует статью в Telegram-канале.
     """
     message = (
         f"<b>{article['title_ru']}</b>\n"
@@ -270,54 +278,47 @@ def publish_to_telegram(article):
 
 def main():
     """
-    Основной процесс:
-    1. Парсинг RSS-ленты (заголовок, ссылка, дата, авторы).
-    2. Для каждой статьи:
-       - Генерация уникального хэша.
-       - Проверка, новая ли статья (по хэшу).
-       - Если статья новая:
-           - Перевод заголовка на русский (из RSS).
-           - Получение HTML-страницы и извлечение аннотации.
-           - Перевод аннотации на русский.
-           - Сохранение в БД.
-           - Публикация в Telegram с требуемым форматированием.
+    1. Парсинг RSS
+    2. Проверка и перевод новых статей
+    3. Сохранение в БД
+    4. Публикация в Telegram
     """
     articles = parse_rss()
     for article in articles:
         # Генерация уникального хэша
         article['hash'] = hashlib.md5(f"{article['title']}{article['link']}".encode()).hexdigest()
 
-        # Если статья уже есть в базе, пропускаем её
+        # Если уже есть, пропускаем
         if not is_article_new(article['hash']):
             logger.info(f"Статья с хэшем {article['hash']} уже существует. Пропускаем публикацию.")
             continue
 
-        # Перевод заголовка на русский
+        # Перевод заголовка
         article['title_ru'] = translate_title_openai(article['title'])
 
-        # Получение HTML-страницы статьи
+        # Скачиваем страницу, ищем аннотацию, переводим
         page_html = fetch_annotation(article['link'])
-
-        # Извлечение и перевод аннотации
         raw_annotation = clean_annotation(page_html)
         article['annotation_ru'] = translate_annotation_openai(raw_annotation)
+
+        # Удаляем <sub>/<sup> из заголовка и аннотации перед сохранением в БД
+        article['title_ru'] = sanitize_for_telegram(article['title_ru'])
+        article['annotation_ru'] = sanitize_for_telegram(article['annotation_ru'])
 
         # Сохранение в БД
         save_to_db(article)
 
-        # Публикация в Telegram
+        # Публикуем в Telegram
         publish_to_telegram(article)
         logger.info(f"Обработана новая статья: {article['title_ru']}")
 
 def export_db_to_csv():
     """
-    Выгружает всю таблицу articles из базы данных в CSV-файл.
-    Если таблица не существует, она будет создана (но будет пустой).
+    Выгружает всю таблицу articles в CSV.
     """
     filename = "ijohe_pub.csv"
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Создаем таблицу, если её нет, чтобы избежать ошибки
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS articles (
             hash TEXT PRIMARY KEY,
@@ -343,7 +344,7 @@ def export_db_to_csv():
 
 def send_csv_to_telegram():
     """
-    Экспортирует базу данных в CSV-файл и отправляет его в Telegram-группу.
+    Экспортируем БД в CSV и отправляем файл в Telegram.
     """
     filename = export_db_to_csv()
     try:
@@ -357,11 +358,10 @@ def send_csv_to_telegram():
         logger.error("Ошибка при отправке CSV-файла: " + str(e))
 
 # Планировщик заданий
-# Запуск RSS-поиска новых статей каждую минуту
+# 1) Проверяем RSS каждую минуту
 schedule.every(1).minutes.do(main)
-
-# Выгрузка БД (CSV) и отправка файла каждую субботу в 17:00
-schedule.every().saturday.at("01:20").do(send_csv_to_telegram)
+# 2) Отправляем CSV по субботам в 02:50 (пример)
+schedule.every().saturday.at("02:50").do(send_csv_to_telegram)
 
 if __name__ == "__main__":
     logger.info("Бот запущен. Ожидание задач...")
